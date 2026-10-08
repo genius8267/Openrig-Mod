@@ -1,0 +1,117 @@
+# Herdr settings shipped with Openrig-Mod.
+# The installer puts this at ~/.config/herdr/config.toml only when no config exists
+# there (or with --replace-herdr-config, after a backup). Check it with:
+#   herdr config check
+
+onboarding = false
+
+[ui]
+sidebar_start_collapsed = false
+sidebar_collapsed_mode = "hidden"
+# Sidebar colors: the state icon shows what needs you (red blocked, yellow
+# working, blue done, gray idle); the agent line shows which tool runs there
+# (orange Claude, green Codex, purple Pi).
+status_indicators = "symbols"
+agent_panel_sort = "priority"
+sidebar_width = 24
+prompt_new_tab_name = false
+copy_on_select = false
+
+# Agent entry: line 1 = state and pane label, line 2 = the tool in its color.
+[ui.sidebar.agents]
+row_gap = 1
+rows = [
+  ["state_icon", { token = "pane", fg = "#eef1fc", dim = false }],
+  [{ token = "agent", fg = "#b4bcd6", dim = false }],
+]
+
+[ui.sidebar.agents.rows_by_agent]
+claude = [
+  ["state_icon", { token = "pane", fg = "#eef1fc", dim = false }],
+  [{ token = "agent", fg = "#fab387", dim = false }],
+]
+codex = [
+  ["state_icon", { token = "pane", fg = "#eef1fc", dim = false }],
+  [{ token = "agent", fg = "#a6e3a1", dim = false }],
+]
+pi = [
+  ["state_icon", { token = "pane", fg = "#eef1fc", dim = false }],
+  [{ token = "agent", fg = "#cba6f7", dim = false }],
+]
+
+# Space row: name only, no blank lines, so many spaces fit on screen.
+[ui.sidebar.spaces]
+row_gap = 0
+rows = [
+  ["state_icon", "workspace"],
+]
+
+[ui.sound]
+enabled = false
+
+# Silent popup when an agent in another tab finishes or needs input.
+# The active tab never pops up. Set delivery = "off" to turn it off.
+[ui.toast]
+delivery = "herdr"
+delay_seconds = 1
+
+[ui.toast.herdr]
+position = "bottom-right"
+
+[theme]
+name = "catppuccin"
+auto_switch = false
+
+[theme.custom]
+# Distinct state colors: blocked and done no longer look alike, and idle is
+# gray so only agents that need you stand out.
+red = "#f38ba8"     # blocked, needs input
+teal = "#89b4fa"    # done, not seen yet
+yellow = "#f9e2af"  # working
+green = "#7f849c"   # idle
+active_row_bg = "#45475a"
+# Brighter sidebar text than the Catppuccin defaults.
+text = "#eef1fc"
+subtext0 = "#cdd6f4"
+overlay1 = "#b4bcd6"
+overlay0 = "#9aa2bf"
+
+[update]
+channel = "stable"
+
+[keys]
+# The prefix stays on Herdr's default ctrl+b.
+# Cmd+Shift+C / Cmd+Shift+X open and close tabs (Herdr refuses plain Shift+letters).
+# The Hangul keys are the same physical keys with a Korean input source on;
+# they do nothing on other layouts.
+new_tab = ["prefix+c", "cmd+shift+c", "cmd+shift+ㅊ"]
+close_tab = ["prefix+shift+x", "cmd+shift+x", "cmd+shift+ㅌ"]
+rename_tab = ["prefix+shift+t", "cmd+r", "cmd+ㄱ"]
+goto = ["prefix+g", "cmd+k"]
+# Shift+arrows move between tabs and spaces.
+previous_tab = ["prefix+p", "shift+left"]
+next_tab = ["prefix+n", "shift+right"]
+previous_workspace = "shift+up"
+next_workspace = "shift+down"
+cycle_pane_next = ["prefix+tab", "alt+up"]
+cycle_pane_previous = ["prefix+shift+tab", "alt+down"]
+
+# Lazygit over the focused pane (needs lazygit installed). q closes it.
+# The PATH prefix finds Homebrew's lazygit when the server started with a bare PATH.
+[[keys.command]]
+key = ["cmd+shift+g", "prefix+d"]
+type = "popup"
+command = "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"; cd \"${HERDR_ACTIVE_PANE_CWD:-.}\" && exec lazygit"
+description = "Git status"
+width = "90%"
+height = "85%"
+
+# CJK input helpers. Harmless with other keyboards. Keep this table last.
+[experimental]
+# Prefix keys work while a CJK input source is on: Herdr switches to the ASCII
+# layout during prefix mode and back after.
+switch_ascii_input_source_in_prefix = true
+# Composition and the candidate window stay at the cursor inside agent TUIs that
+# hide the cursor. Limited to these agents, so editors and shells are unchanged.
+reveal_hidden_cursor_for_cjk_ime = true
+cjk_ime_agents = ["claude", "codex", "pi"]

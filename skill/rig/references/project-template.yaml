@@ -1,0 +1,61 @@
+# Project template for the rig skill. Replace <project-id> and the four <...-seat>
+# placeholders with real seat addresses (pod-member@rig). Lifecycle: plan, build,
+# check, wave-review, merge-management, release-boundary.
+schema: openrig.project/v0alpha1
+kind: project
+metadata: { id: <project-id> }
+install:
+  intent: SPEC.md
+  context: []
+  skills: []
+missions: { root: missions }
+lifecycle:
+  profile: standard-v0
+  profiles:
+    standard-v0:
+      required_steps:
+        - plan
+        - build
+        - check
+        - wave-review
+        - merge-management
+        - release-boundary
+      workflow:
+        entry: { role: lead }
+        exception_routing: { orchestrator_role: lead }
+        roles:
+          lead: { preferred_targets: [<lead-seat>] }
+          driver: { preferred_targets: [<builder-seat>] }
+          qa: { preferred_targets: [<qa-seat>] }
+          reviewer: { preferred_targets: [<reviewer-seat>] }
+        steps:
+          - id: plan
+            actor_role: lead
+            depends_on: []
+            objective: Confirm mission intent with the owner, split it into waves and slices with SPEC.md proof contracts, and route the first slice.
+            allowed_exits: [handoff, waiting, failed]
+          - id: build
+            actor_role: driver
+            depends_on: [plan]
+            objective: Build the routed slice inside its boundary, record commands and evidence with rig proof add, commit locally when green.
+            allowed_exits: [handoff, waiting, failed]
+          - id: check
+            actor_role: qa
+            depends_on: [build]
+            objective: Rerun the checks in the slice proof contract and judge the proof; return specific findings to the driver or pass.
+            allowed_exits: [handoff, waiting, failed]
+          - id: wave-review
+            actor_role: reviewer
+            depends_on: [check]
+            objective: Review the finished wave for defects and drift from mission intent; classify each miss as CONTEXT-GAP or JUDGMENT-GAP.
+            allowed_exits: [handoff, waiting, failed]
+          - id: merge-management
+            actor_role: lead
+            depends_on: [wave-review]
+            objective: Reconcile the local commits into the target branch plan and bring the owner the exact push, PR or merge decision with its context; do not perform it without authorization.
+            allowed_exits: [handoff, waiting, failed]
+          - id: release-boundary
+            actor_role: lead
+            depends_on: [merge-management]
+            objective: Record what shipped and what was left, write lessons to LEARNED.md, close or park leftover queue rows, then finish.
+            allowed_exits: [done, waiting, failed]

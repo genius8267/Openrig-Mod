@@ -1,0 +1,48 @@
+#!/bin/sh
+# rig-on <host-id|local> <rig args...>
+# Run one rig command on another machine over SSH, in that user's login shell (so
+# `rig` is on PATH), for the verbs that have no --host (rig seat *, handover,
+# compact, restore, snapshot, queue list, workflow, scope, watchdog, up with a
+# library team). The SSH target comes from `rig host list --json`: the entry's
+# `target`, or the host part of its `url`. OPENRIG_SESSION_NAME, when set, is
+# forwarded so writes keep their identity.
+set -eu
+if [ "$#" -lt 2 ]; then
+  echo "usage: rig-on <host-id|local> <rig args...>" >&2
+  exit 2
+fi
+PY=$(command -v python3 || true)
+if [ -z "$PY" ]; then
+  echo "rig-on: python3 is required" >&2
+  exit 2
+fi
+host=$1; shift
+if [ "$host" = local ] || [ "$host" = this ]; then
+  exec rig "$@"
+fi
+hosts_json=$(rig host list --json)
+target=$(printf '%s' "$hosts_json" | "$PY" -I -c '
+import json, sys
+from urllib.parse import urlparse
+want = sys.argv[1]
+for h in json.load(sys.stdin):
+    if h.get("id") == want:
+        print(h.get("target") or (urlparse(h["url"]).hostname if h.get("url") else ""))
+        break
+' "$host")
+if [ -z "$target" ]; then
+  known=$(printf '%s' "$hosts_json" | "$PY" -I -c 'import json,sys; print(", ".join(h["id"] for h in json.load(sys.stdin)) or "none")')
+  echo "rig-on: unknown host '$host'. Known: $known" >&2
+  exit 2
+fi
+remote=$("$PY" -I - "$@" <<'EOF'
+import os, shlex, sys
+cmd = "rig " + " ".join(shlex.quote(a) for a in sys.argv[1:])
+who = os.environ.get("OPENRIG_SESSION_NAME")
+if who:
+    cmd = "OPENRIG_SESSION_NAME=" + shlex.quote(who) + " " + cmd
+# The remote side expands $SHELL itself, so each machine uses its own login shell.
+print('exec "${SHELL:-/bin/sh}" -lc ' + shlex.quote(cmd))
+EOF
+)
+exec ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "$remote"
