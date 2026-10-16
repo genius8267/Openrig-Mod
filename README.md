@@ -15,7 +15,7 @@ OpenRig runs agents (Claude Code, Codex) as a team in terminals: a lead, builder
 
 ## What you get
 
-- **`/rig` skill for Claude Code.** Say what you want: "what needs me", "set up a team to build X", "add a reviewer", "stop the docs rig", "restore my rigs after the reboot". It writes the project, mission and slice files, starts the team, hands it the work, opens it in Herdr, fixes stuck agents and reports back. It asks you only for real decisions.
+- **`/rig` skill for Claude Code.** Type `/rig`, with or without words. Each run first brings OpenRig up on all your machines: the daemon, the kernel team, the rigs you keep running, and a fresh start for stuck agents. Then it does what you asked: "what needs me", "set up a team to build X", "add a reviewer", "stop the docs rig". It writes the project, mission and slice files, starts the team, hands it the work, opens it in Herdr and reports back. It asks you only for real decisions.
 - **Herdr settings.** A readable sidebar with agent state colors, toasts when an agent in another tab finishes, quick tab keys, a lazygit popup, and input fixes for Korean, Japanese and Chinese keyboards.
 - **One installer and one uninstaller.** Both are safe to run again. They back up everything they change.
 
@@ -52,7 +52,7 @@ The installer asks before it runs a third-party installer. Useful options:
 
 | What | Where | Notes |
 |---|---|---|
-| OpenRig CLI (`@openrig/cli` 0.6.7) | global npm, or `~/.npm-global` when global npm is not writable | Adds two marked PATH lines to your shell startup file in the second case. An existing different version stays unless you pass `--upgrade-openrig`. |
+| OpenRig CLI (`@openrig/cli` 0.6.10) | global npm, or `~/.npm-global` when global npm is not writable | Adds two marked PATH lines to your shell startup file in the second case. An existing different version stays unless you pass `--upgrade-openrig`. |
 | Herdr | `~/.local/bin/herdr` | Only when Herdr is missing. Uses Herdr's official installer. |
 | Herdr settings | `~/.config/herdr/config.toml` | Only when you have no config. |
 | Herdr auto-title plugin | Herdr plugin folder | Only when Go is installed. Pinned to one commit. |
@@ -84,16 +84,17 @@ Then describe what you want. Examples:
 /rig add my other machine "studio"
 ```
 
-`/rig` with no words fixes what it safely can and lists what needs you, with a recommended answer for each. Reply `go` to accept all recommendations.
+`/rig` with no words brings OpenRig up on every machine, fixes what it safely can, opens the OpenRig view, and lists what needs you, with a recommended answer for each. Reply `go` to accept all recommendations. On a healthy fleet of four Macs, the bring-up takes about 4 seconds.
 
 ## How `/rig` behaves
 
 - **It acts on its own** for anything that you asked for or that can be undone: starting and stopping teams you named, adding seats, messages, queue work, reminders, snapshots, restores.
 - **It asks first** before anything that cannot be undone or leaves your machines: `rig destroy`, deletes, git push, PR merge, deploys, payments, posts in your name.
 - **Teams build, `/rig` orchestrates.** It writes specs and work items. It hands code changes to a team through the OpenRig queue.
-- **It uses OpenRig's own screens.** `rig tui` is the dashboard. Teams open with `rig terminal open <rig> --provider herdr`.
+- **It uses OpenRig's own screens.** `rig tui` is the dashboard. `/rig` checks that it runs and points it at new work. Teams open with `rig terminal open <rig> --window`, one Herdr tile per agent.
+- **It heals stuck agents.** An agent that quit or lost its session gets a fresh start: a new conversation in the same seat. Its queue work stays. A Codex "Hooks need review" prompt gets "Continue without trusting". To trust a hook, type `/hooks` in that agent's tile.
 - **It keeps receipts.** Each fleet change gets a dated note with its undo step in `<OpenRig workspace>/artifacts/ops-receipts/`.
-- **It learns your setup** in the machine notes file: your team preferences, other machines, rigs to leave alone, quirks.
+- **It learns your setup** in the machine notes file: your team preferences, other machines, rigs to keep running, rigs to leave alone, quirks.
 - **Agents inside a team do not use it.** `/rig` is for your own Claude Code session. Seats keep OpenRig's `openrig-skills`.
 
 ## Herdr keys
@@ -117,7 +118,7 @@ Sidebar colors: red means the agent waits for you, yellow means it works, blue m
 
 ## More than one machine
 
-Run the installer on each machine, connect them with Tailscale, then tell `/rig` about the other machine. See [docs/multi-machine.md](docs/multi-machine.md).
+Run the installer on each machine and connect them with Tailscale. Then let each machine list the others. A `/rig` on any machine keeps all of them running. See [docs/multi-machine.md](docs/multi-machine.md).
 
 ## Update
 
@@ -125,7 +126,7 @@ Run the installer on each machine, connect them with Tailscale, then tell `/rig`
 cd Openrig-Mod && git pull && ./install.sh
 ```
 
-The installer replaces the skill (the old copy is backed up) and keeps your Herdr settings and machine notes. To move to the OpenRig version this repository was tested with, add `--upgrade-openrig`, then restart the daemon: `rig daemon stop && rig daemon start`.
+The installer replaces the skill (the old copy is backed up) and keeps your Herdr settings and machine notes. To move to the OpenRig version this repository was tested with, add `--upgrade-openrig`, then restart the daemon: `rig daemon stop && rig daemon start`. A `/rig` also restarts a daemon that runs an older version than the CLI.
 
 ## Uninstall
 

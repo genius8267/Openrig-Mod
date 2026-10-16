@@ -8,7 +8,7 @@
 #   ./install.sh --help          all options
 set -euo pipefail
 
-OPENRIG_VERSION="0.6.7"
+OPENRIG_VERSION="0.6.10"
 AUTO_TITLE_REPO="kryptamine/herdr-auto-title"
 AUTO_TITLE_REF="e78619a26674da2b741457be864169ad56767887"
 HERDR_INSTALL_URL="https://herdr.dev/install.sh"

@@ -15,10 +15,12 @@ Edit these to taste; the skill applies them when it creates or changes teams.
 
 One line per machine this one can reach, filled in as hosts are added (`rig host list --json`).
 
-- (this machine) `<host.name>`: daemon with kernel.
+- (this machine) `<host.name>`: daemon with kernel. `host.selected` is `local`.
+- One fleet: `~/.openrig/hosts.yaml` lists every other machine as `transport: http`, `url: http://<MagicDNS name>:7433`, with no token. Each `/rig` keeps every online machine's kernel running.
 
 ## Rigs
 
+- Keep running (every `/rig` brings these back with `rig up <rig> --existing`): kernel.
 - Leave alone (another session or person owns them): none yet.
 - Intake or factory teams by repository: none yet. Example line: `~/src/app -> lead@app-factory (send changes there)`.
 

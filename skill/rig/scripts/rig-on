@@ -4,8 +4,8 @@
 # `rig` is on PATH), for the verbs that have no --host (rig seat *, handover,
 # compact, restore, snapshot, queue list, workflow, scope, watchdog, up with a
 # library team). The SSH target comes from `rig host list --json`: the entry's
-# `target`, or the host part of its `url`. OPENRIG_SESSION_NAME, when set, is
-# forwarded so writes keep their identity.
+# `target`, or the host part of its `url`. OPENRIG_SESSION_NAME and NODE_DISABLE_COMPILE_CACHE,
+# when set, are forwarded so writes keep their identity.
 set -eu
 if [ "$#" -lt 2 ]; then
   echo "usage: rig-on <host-id|local> <rig args...>" >&2
@@ -38,9 +38,9 @@ fi
 remote=$("$PY" -I - "$@" <<'EOF'
 import os, shlex, sys
 cmd = "rig " + " ".join(shlex.quote(a) for a in sys.argv[1:])
-who = os.environ.get("OPENRIG_SESSION_NAME")
-if who:
-    cmd = "OPENRIG_SESSION_NAME=" + shlex.quote(who) + " " + cmd
+for key in ("NODE_DISABLE_COMPILE_CACHE", "OPENRIG_SESSION_NAME"):
+    if os.environ.get(key):
+        cmd = key + "=" + shlex.quote(os.environ[key]) + " " + cmd
 # The remote side expands $SHELL itself, so each machine uses its own login shell.
 print('exec "${SHELL:-/bin/sh}" -lc ' + shlex.quote(cmd))
 EOF

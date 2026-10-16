@@ -11,7 +11,8 @@ Write one sentence: the outcome, for whom, and what counts as done. Fill the gap
 | The intent is | Route |
 |---|---|
 | A change to a repository the machine notes assign to an intake or factory team | Hand it to that team's lead as a queue row (or its own intake command, if the notes name one). Skip to step 9. |
-| A question, a status check or a fleet operation | `references/routes.md`. |
+| A question, a status check or a fleet operation | `references/routes.md`. Register nothing. |
+| A document, research or a design that this session writes itself (no product code) | Steps 2 and 3, then do the work. Record each result on the slice with `OPENRIG_SESSION_NAME=rig-skill rig scope --workspace <root> slice progress <NN-slug> --mission <mission> --add "<result and path>" --status done`. Skip steps 4 to 8. |
 | Ongoing work, several steps, another repository, or a new product area | Steps 2 to 10. |
 
 ## 2. Project
@@ -84,7 +85,7 @@ Team preferences (models, effort, permissions, pairing) come from the machine no
 
 ## 9. Show it
 
-- A team on this machine: `rig terminal open <team> --provider herdr` (its own Herdr workspace, one tile per seat). Tell the owner where it opened and which tile is the lead.
+- Run `scripts/rig-up --show --project <id> --mission <name> --open <team>` (routes section 0 steps 7 to 10): it points the dashboard at the project and mission, opens the OpenRig view, and opens a team on this machine as its own Herdr workspace, one tile per seat. Tell the owner where it opened and which tile is the lead.
 - A team on another machine: say which machine, and give `ssh -t <mac> "env -u TMUX tmux attach-session -t '=<lead-seat>'"` for the lead.
 
 ## 10. Record and report

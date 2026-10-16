@@ -1,6 +1,6 @@
 # More than one machine
 
-One Claude Code session with `/rig` can see and drive teams on all your machines. Each machine runs its own OpenRig daemon. Your main machine keeps a list of the others.
+Your machines form one fleet. Each machine runs its own OpenRig daemon and lists every other machine. A `/rig` on any machine sees and drives the teams on all of them, and keeps the kernel running on every machine that is online.
 
 ## 1. Put the machines on one private network
 
@@ -32,27 +32,25 @@ The daemon finds the Tailscale address when it starts. If Tailscale was not runn
 rig daemon stop && rig daemon start
 ```
 
-## 3. Add the other machines on your main machine
+## 3. Make one fleet: every machine lists the others
 
-On the other machine, get its Tailscale address:
+On each machine, add every other machine. Give a machine the same id on every machine. Use its MagicDNS name, not its address, so the entry still works when the address changes. `tailscale status --json` shows each machine's `DNSName`.
 
-```bash
-tailscale ip -4
-```
-
-Then, on your main machine, tell `/rig`:
+Tell `/rig`:
 
 ```text
-/rig add my other machine "studio" at 100.x.y.z
+/rig add my other machine "studio"
 ```
 
 Or do it yourself:
 
 ```bash
-rig host add --id studio --transport http --url http://100.x.y.z:7433
+rig host add --id studio --transport http --url http://studio.<tailnet>.ts.net:7433
 rig host doctor studio
-rig ps --all-hosts
+rig ps --host studio
 ```
+
+Keep `host.selected` at `local` on every machine (`rig config get host.selected`). `/rig` reaches the other machines with `--host <id>`. A selected remote host sends your plain `rig` commands to that machine.
 
 `rig host pair <address>` is another way to connect. It asks for one approval on the other machine.
 
@@ -64,20 +62,20 @@ Most rig commands accept `--host <id>`. A few do not (for example seat, restore 
 2. On your main machine, copy your SSH key to it: `ssh-copy-id <user>@<tailscale address>`
 3. Check that it works without a password: `ssh -o BatchMode=yes <tailscale address> true`
 
+With SSH, `/rig` also starts a machine whose daemon gives no answer (`rig start --last` on that machine) and heals the agents there.
+
 Without SSH, `/rig` still sees and drives the other machine through `--host`. It tells you when a step needs SSH.
 
 ## 5. After a reboot
 
-Start the daemon and bring your teams back on each machine:
+Type `/rig`. On every online machine it starts the daemon and the kernel, and it restores the rigs on the "Keep running" line of that machine's notes. Machines that Tailscale reports offline are skipped.
 
-```text
-/rig bring my rigs back after the reboot
-```
-
-or by hand: `rig start --last` (it starts the daemon and restores the rigs that were running).
+By hand: `rig start --last` on each machine (it starts the daemon and restores the rigs that were running).
 
 ## Keep the machines the same
 
+- Each `/rig` checks every online machine: the daemon version, the kernel, the rigs to keep running, and stuck agents.
 - Run `git pull && ./install.sh` on each machine after an update.
 - Each machine has its own Herdr settings and its own machine notes in `~/.config/openrig-mod/machine-notes.md`.
 - See a team on another machine: `/rig` shows its status here. To watch its terminals, open them on that machine, or use the SSH command `/rig` gives you.
+- See another machine's dashboard here: `OPENRIG_URL=http://studio.<tailnet>.ts.net:7433 rig tui`.

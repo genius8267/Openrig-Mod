@@ -8,15 +8,41 @@ Tiers:
 - N: runs when the owner's words name it. If it is your own idea and seats hold open work, ask once with your recommendation.
 - X: ask once first, always (cannot be undone, or reaches outside the machines). The list is at the end.
 
-Other machines: add `--host <id>` where the verb has it (HTTP host entries: up, down, launch, transcript, broadcast, queue create/handoff); otherwise run on that machine with `scripts/rig-on <host> ...`. Check once per session: `rig config get host.selected`; a selected host silently redirects ps, whoami, send, capture, transcript, broadcast, launch, up and down, so pass `--host` explicitly or report the redirect.
+Other machines: add `--host <id>` where the verb has it (HTTP host entries: up, down, launch, transcript, broadcast, queue create/handoff); otherwise run on that machine with `scripts/rig-on <host> ...`. A selected remote host silently redirects ps, whoami, send, capture, transcript, broadcast, launch, up and down: use the local prefix from section 0 step 1 for this machine, and `--host` for the other one.
 
 Identity for writes: this session is not a seat, so every command that writes (queue update, block, resolve, handoff; chatroom send, topic, clear; watchdog register, stop; seat set-*; compact; workflow instantiate, abort; scope approve) needs `OPENRIG_SESSION_NAME` set in front of it, or it fails with `actor_required`. Use `OPENRIG_SESSION_NAME=rig-skill` for your own actions and `OPENRIG_SESSION_NAME=human@kernel` only to record the owner's own decision or words. `rig queue create` takes `--source rig-skill` instead. `scripts/rig-on` forwards the variable to the other machine. tmux targets for a seat's pane are `'=<pod-member>@<rig>:'` (the trailing colon is required).
 
-## 0. Install or start OpenRig (replaces the shipped `rigs` skill)
-- Installed? `rig --version`. If not: needs macOS or Linux, Node 22 or 24, tmux, and Claude Code or Codex signed in. Install with `npm install -g @openrig/cli` (if the global npm folder is not writable, `npm install -g --prefix ~/.npm-global @openrig/cli` and put `~/.npm-global/bin` on PATH), then `rig preflight` and `rig doctor` (A). The Openrig-Mod installer does all of this. Never `rig setup` without `--no-herdr`.
-- Daemon down: `rig daemon start` (A; add `--no-kernel` on machines the machine notes mark as daemon-only). After a reboot: `rig start --last` (A).
-- The kernel's operator can also start teams for the owner; this skill does that work itself, so the owner never has to switch panes.
-- Load: `help` when anything in install or start fails.
+## 0. Bring-up and show (every `/rig`; replaces the shipped `rigs` skill)
+`scripts/rig-up` runs steps 1 to 6 on this machine and on every reachable machine. `scripts/rig-up --show` adds steps 7 to 10. Run the steps by hand only for a `gaps` entry or when the script cannot run. Run steps 1 to 6 first and steps 7 to 10 last, after the request. Each step reads first and acts only on a gap, so a second run changes nothing. A step that fails goes in the report. Continue with the next step that does not depend on it.
+Fleet: each `/rig` keeps the kernel running on every machine in `rig host list` that Tailscale reports online. A machine whose daemon gives no answer gets `scripts/rig-on <id> start --last`.
+
+1. Host: `rig config get host.selected`. If it names another machine, the owner's plain `rig` commands go there (ps, whoami, send, capture, transcript, broadcast, launch, up, down). Put `OPENRIG_HOST_SELECTED=local` (the local prefix) in front of every rig command for this machine. Queue writes do not follow the selection. Do not change it. If the machine notes do not record it yet, report it once and add it to the notes. `rig host select local` changes it, only on the owner's word.
+2. Install: if `rig --version` fails, OpenRig needs macOS or Linux, Node 22 or 24, tmux, and Claude Code or Codex signed in. Install with `npm install -g @openrig/cli` (if the global npm folder is not writable, `npm install -g --prefix ~/.npm-global @openrig/cli` and put `~/.npm-global/bin` on PATH), then `rig preflight` and `rig doctor` (A). The Openrig-Mod installer does all of this. Never `rig setup` without `--no-herdr`.
+3. Daemon: `rig daemon status`.
+   - Down: `NODE_DISABLE_COMPILE_CACHE=1 rig start --last --json` (A). It starts the daemon, checks the kernel and restores the rigs that were last running. Add `--no-kernel` to `rig daemon start` instead on machines the machine notes mark as daemon-only.
+   - Up: compare `semver` and `commit` from `curl -s -m 3 http://127.0.0.1:<port>/healthz` (port from `rig daemon status`) with `rig --version`. If they differ, the daemon still runs an older CLI. Run `rig daemon stop`, then `NODE_DISABLE_COMPILE_CACHE=1 rig daemon start --wait-for-kernel` (A). The tmux sessions survive this. If `stop` exits non-zero, read `rig daemon status` and `rig daemon logs`, and do not repeat it. If `/healthz` gives no answer, skip the check and say so.
+4. Kernel: read the `Kernel:` line of `rig status` and `rig ps --nodes --rig kernel --json`.
+   - `auth_blocked`: no runtime is signed in. Give the owner the one sign-in command (`claude auth login` or `codex login`).
+   - `skipped` after a restart means the kernel exists. Read its seats.
+   - A seat that is not `running` and `ready`: heal it with section 2. A `detached` seat (its tmux session is gone): `rig launch kernel <pod.member>` (A).
+   - Every kernel seat failed and none is live: `rig up kernel --existing` (A). For each seat whose resume failed: `rig up kernel --existing --fresh <logicalIds> --yes` (A). Report that each one started a new conversation.
+   - Do not recreate the kernel or change its topology to open a view.
+5. Rigs to keep running: for each rig in the machine notes "Keep running" line that is not running, `rig up <rig> --existing` (A). `partially_restored` or exit 1 names a seat that lacks part of its guidance or failed: heal it with section 2 or report it. Leave every other stopped rig stopped. On a bare `/rig`, name them in one report line.
+6. Seats: heal routine attention in the running rigs with section 2.
+7. Dashboard: the kernel's `operator-human` terminal runs the TUI. Read it with `env -u TMUX tmux capture-pane -p -t '=operator-human@kernel:' | head -3`. The first line starts with `cmd ▸` while the TUI runs. If the pane shows a shell, start the TUI: `env -u TMUX tmux send-keys -t '=operator-human@kernel:' -l 'rig tui'`, then `env -u TMUX tmux send-keys -t '=operator-human@kernel:' Enter` (A). If the seat's `tmuxAttachCommand` names `-L <name>` or `-S <path>`, add the same option to each tmux command.
+8. Point the dashboard at the work: if this run registered or advanced work, type `project <id>`, then `mission <name>`, into the dashboard with the same two send-keys commands (A). Type only when the first line reads `cmd ▸ ▊  Tab complete`, which means the command bar is empty. Capture again to confirm, and say in the report that you changed the dashboard's view. Other dashboard commands: `projects`, `source`, `attention`, `: topology`.
+9. Open the view: `rig terminal open saved:kernel --window --json` (A).
+   - Inside a Herdr pane (`HERDR_ENV=1`, with `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` set), put `env -u SSH_CONNECTION -u SSH_CLIENT -u SSH_TTY` in front. The CLI refuses SSH before it checks for Herdr. Its current-Herdr route opens no desktop window and needs the pane's Herdr socket to match the daemon's.
+   - In Herdr it focuses the live `openrig kernel` space with the same plan (`reusedWorkspace`), or creates one. The plan depends on the width: below 120 columns or from 120 columns. A width change gives one more space.
+   - Never use `--provider herdr` for this view. It creates a new space on every call and reuses none.
+   - Outside Herdr it opens a new terminal window or tab. Before that, say that clicking Allow on the one-time macOS Automation prompt is fine.
+   - Read `opened`, `reusedWorkspace`, `absent`, `degraded` and `notes`. Report absent or degraded roles as they are. Report extra `openrig kernel` spaces with `herdr workspace close <id>`, and close nothing.
+   - Not opened (SSH outside Herdr, a Herdr endpoint mismatch, no display, a denied prompt): report the reason once, and give the `run:` command it printed, exactly. `rig tui --shared` is the dashboard-only fallback (Ctrl-b, then d, detaches). Do not retry in another app.
+   - The result does not prove that the owner sees the view. The note "Herdr shows the openrig kernel space in the person's current session" is the best evidence. Report it as OpenRig's claim.
+10. A team this run started or changed on this machine: run step 9 with `<team>` in place of `saved:kernel` (A). It opens the team as its own Herdr space, one tile per seat. The same plan reuses its space. Changed membership creates a new one.
+
+- The kernel's operator can also start teams for the owner. This skill does that work itself, so the owner never has to switch panes.
+- Load: `help` when anything in install or start fails, and `reference/getting-started.md#incomplete-setup-and-restart` for restart symptoms.
 
 ## 1. Status: "what's running", "how is X", "what needs me"
 - Read, in one batch: `rig ps --json` (rigs, ATTN counts), `rig ps --nodes -A --json` (seats: `lifecycleState`, `startupStatus`, `agentActivity.state`, work counts), `rig view show held --json`, `rig view show escalations --json`, `rig queue list -A --json --limit 1000`.
@@ -27,11 +53,13 @@ Identity for writes: this session is not a seat, so every command that writes (q
 - Load: `skills/openrig-user` (syntax), `onboarding-width` (what is possible).
 
 ## 2. Heal stuck seats (do this without being asked)
+- The owner keeps no old conversations. A stuck seat with no live question gets a fresh occupant (`rig seat launch <seat> --fresh --stop`), not a resume attempt. Its queue rows stay with the seat. `scripts/rig-up` does this, and the rules below cover what it reports as `gaps`.
+- Codex "Hooks need review" prompt: answer `3` ("Continue without trusting"), then `rig seat continue <seat>`. Trusting changed hooks lets them run outside the sandbox. That is the owner's call.
 - Read the record before the pane: `rig seat status <seat>`, the node row (`lifecycleState`, `startupStatus`, `heldReason`, `latestError`, `agentActivity.reason`), then `rig capture <seat> --lines 40`.
 - Routine prompt on screen (Codex or Claude update offer, trust this folder, continue, the default the team launched with): `rig send <seat> "<key>" --dangerously-interact --reason "<why>"` (A). ESC is sent as `$'\e'`, Enter as a carriage return. A prompt that grants new access, spends money or changes scope goes to the owner.
 - Startup context not delivered after a prompt: `rig seat continue <seat>` (A).
 - Messages stack up unsent (the prompt shows `[Pasted text #n]`, `--verify` says rendered-unconfirmed, compaction stops at `preparation_incomplete`): check `env -u TMUX tmux display-message -p -t '=<seat>:' '#{pane_in_mode}'`. `1` means the pane is in tmux copy mode, usually because someone scrolled in an attached Herdr tile; leave it with `env -u TMUX tmux send-keys -t '=<seat>:' -X cancel`, then submit the stacked input once with `env -u TMUX tmux send-keys -t '=<seat>:' Enter` (A).
-- The agent quit and the pane shows a shell (`rig launch` then refuses: "already running"): resume the same conversation in the pane, `env -u TMUX tmux send-keys -t '=<seat>:' -l 'claude --resume "<seat>" --permission-mode bypassPermissions'` and Enter (Codex seats: `codex resume`), pick the most recent matching session in the picker, then `rig reconcile-session <seat> --rig <rigId> --node <pod.member>` (A). This keeps the seat's context; a fresh launch would lose it.
+- The agent quit and the pane shows a shell (`rig launch` then refuses: "already running"): `rig seat launch <seat> --fresh --stop --reason "<why>"` (A). If the owner resumed the conversation in the pane by hand, adopt that session instead: `rig reconcile-session <seat> --rig <rigId> --node <pod.member>` (A).
 - A blank or dead occupant with no open work: `rig seat launch <seat> --fresh --stop --reason "<why>"` (A). With open work rows, hand them on first (`rig queue handoff`) or ask.
 - A stale flag with live evidence against it: `rig seat clear-attention <seat> --reason "<evidence>"` (A). Some classes (restore outcome) cannot be cleared by a reason; report those instead of repeating fixes.
 - Seats failing on login or auth errors (for example `401`, `auth_unavailable`, a sign-in prompt): the runtime's login on this machine expired. That is the owner's sign-in: give them the one command (`claude auth login`, `codex login`, or the gateway's own login if the machine notes name one).
@@ -90,17 +118,17 @@ Identity for writes: this session is not a seat, so every command that writes (q
 - Load: `skills/seat-continuity-and-handover`, `skills/claude-compaction-restore`.
 
 ## 12. Other machines
-- Read: `rig host list --json`, `rig host doctor <id>`, `rig ps --all-hosts --json`.
-- Add a machine (both on the same Tailscale network, OpenRig running on both): `rig host add --id <name> --transport http --url http://<its Tailscale name or IP>:7433`, then `rig host doctor <name>`. The daemon listens on Tailscale by default, so no token is needed inside the tailnet. `rig host pair <address>` is the alternative when the other machine has an approval recipient. Record the machine in the machine notes. Add the reverse link on the other machine with `scripts/rig-on` only if the owner wants both directions.
-- Act on a machine without `--host` support: `scripts/rig-on <host> <args>`.
+- Read: `rig host list --json`, `rig host doctor <id>`, `rig ps --host <id> --json` (0.3 s each). `rig ps --all-hosts --json` waits for offline machines (10.7 s here).
+- One fleet: every machine lists every other machine with the same ids, as `transport: http` and `url: http://<MagicDNS name>:7433`, with no token. The daemon listens on Tailscale only, never on a public address. `~/.openrig/hosts.yaml` is the registry. Back it up, then edit it, or use `rig host add --id <name> --transport http --url http://<MagicDNS name>:7433` and `rig host doctor <name>`. `rig host pair` needs a bearer token on the target, so it does not apply to tokenless daemons. Add each new machine to every machine's registry with `scripts/rig-on`, and record it in the machine notes.- Act on a machine without `--host` support: `scripts/rig-on <host> <args>`.
 - A new team on another machine: `scripts/rig-on <host> up <team or spec path> --cwd <path on that machine> --plan`, then without `--plan`. `rig up --host` accepts only an existing rig name or a spec path that exists on that machine.
 - Move one file: `rig file copy <src> <host>:<abs>` (SSH entries only; `--dry-run` first because it overwrites).
 - Load: `skills/core/cross-host-rig-commands`.
 
 ## 13. See it (OpenRig's own screens)
-- Dashboard: the owner's `rig tui` pane. Another machine's TUI: `OPENRIG_URL=http://<tailnet-ip>:7433 rig tui` (the IP is in `rig host list --json`).
-- A team's terminals: `rig terminal open <rig> --provider herdr` opens the rig as its own Herdr workspace, one tile per seat (up to 16 per tab); closing a tile leaves the seat running. Pod or work views: `pod:<rig>/<pod>`, `mission:<id>`, `slice:<id>`. Saved views: `rig terminal views`.
-- The kernel's TUI and operator together: `rig terminal open saved:kernel --window`.
+- The OpenRig view (dashboard TUI, operator and advisor): section 0 steps 7 to 9. Below 120 columns the operator fills the first page. From 120 columns the dashboard and operator share it. The advisor has its own tab.
+- Another machine's TUI: the dashboard command `host <id>`, or `OPENRIG_URL=http://<MagicDNS name>:7433 rig tui` (the URL is in `rig host list --json`).
+- A team's terminals: section 0 step 10 opens the rig as its own Herdr workspace, one tile per seat (up to 16 per tab). Closing a tile leaves the seat running. Pod or work views: `pod:<rig>/<pod>`, `mission:<id>`, `slice:<id>`. Saved views and provider state: `rig terminal views --json`, `rig terminal status --json`.
+- Manual attach (the owner asks, or no window can open): `rig ps --nodes --rig kernel --json --fields logicalId,canonicalSessionName,tmuxAttachCommand`, then `env -u TMUX <tmuxAttachCommand>` of the `operator.agent` row.
 - Seats on another machine cannot be tiled from here; give the owner `ssh -t <machine> "env -u TMUX tmux attach-session -t '=<seat>'"` or open the view on that machine.
 - Herdr tiles from `rig terminal open` are live tmux attaches: scrolling in one puts the seat's pane into copy mode and stops deliveries until it is left (q or Esc). Section 2 has the fix.
 - Before the owner types into a seat: `rig seat set-typing-guard <seat> --enabled true --reason "owner typing"`, and off afterwards.

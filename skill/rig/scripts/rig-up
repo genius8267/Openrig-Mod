@@ -1,0 +1,404 @@
+#!/usr/bin/env -S python3 -I
+"""rig-up: the deterministic bring-up for a bare /rig (routes.md section 0).
+
+Usage: rig-up [--show] [--open <target>]... [--project <id> --mission <name>]
+       rig-up --self-test
+
+On this machine and on every reachable machine in `rig host list`, it starts the
+daemon and the rigs to keep running, and heals stuck seats:
+- a Codex hook-trust prompt gets "continue without trusting" (it grants nothing),
+- a busy seat with a stale flag gets clear-attention,
+- any other stuck seat gets a fresh occupant (the owner keeps no old conversations),
+- a live seat that asks a question stays as a gap for the caller.
+Each step reads first and acts only on a gap, so a second run changes nothing.
+It prints one JSON object: version, host_selected, daemon, local, fleet, actions,
+gaps, dashboard, view, receipt, elapsed_s. Exit 3 means this runs inside a seat.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+
+RIG_ON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rig-on")
+NOTES = os.path.expanduser("~/.config/openrig-mod/machine-notes.md")
+ENV = dict(os.environ, OPENRIG_HOST_SELECTED="local")
+ENV.pop("TMUX", None)
+ACT_ENV = dict(ENV, OPENRIG_SESSION_NAME="rig-skill", NODE_DISABLE_COMPILE_CACHE="1")
+BAD = {"attention_required", "failed"}
+QUIET = {None, "idle", "unknown", "needs_input"}
+SHELLS = {"zsh", "bash", "sh", "fish", "-zsh", "-bash"}
+HOOK_PROMPT = "3. Continue without trusting"
+DASH = "=operator-human@kernel:"
+
+actions, gaps = [], []
+
+
+def run(args, timeout=60, env=ENV):
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+        return p.returncode, p.stdout, p.stderr.strip()[-400:]
+    except FileNotFoundError:
+        return 127, "", "%s: not found" % args[0]
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out after %ss (it may still take effect)" % timeout
+
+
+def as_json(out):
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def act(what, args, undo, timeout=180):
+    rc, out, err = run(args, timeout, ACT_ENV)
+    actions.append({"did": what, "rc": rc, "undo": undo})
+    return rc, as_json(out), err
+
+
+def gap(kind, where, detail=""):
+    gaps.append({"kind": kind, "where": where, "detail": detail})
+
+
+def at(hid, args):
+    """A rig command for this machine (hid None) or another one over rig-on."""
+    return ["rig", *args] if hid is None else [RIG_ON, hid, *args]
+
+
+def host_args(hid):
+    return [] if hid is None else ["--host", hid]
+
+
+def where(hid, name):
+    return name if hid is None else "%s on %s" % (name, hid)
+
+
+def names(text, prefix, default):
+    """Rig names on the machine-notes line that starts with prefix."""
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            rest = line.split(":", 1)[-1].strip()
+            return [] if rest.lower().startswith("none") else re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", rest)
+    return default
+
+
+def version_match(cli, semver, commit):
+    """`rig --version` text ('0.6.10 (3001cc43)') against /healthz fields."""
+    m = re.match(r"(\S+)\s+\((\w+)\)", cli.strip())
+    return bool(m) and m.group(1) == semver and (commit or "").startswith(m.group(2))
+
+
+def seat_gap(n):
+    activity = (n.get("agentActivity") or {}).get("state")
+    return n.get("lifecycleState") in BAD or n.get("startupStatus") in BAD or activity == "needs_input"
+
+
+def classify(n, screen):
+    """The heal for one stuck seat: skip_hooks, ask, clear or fresh."""
+    if HOOK_PROMPT in screen:
+        return "skip_hooks"
+    activity = (n.get("agentActivity") or {}).get("state")
+    if n.get("lifecycleState") == "running" and n.get("startupStatus") == "ready" and activity == "needs_input":
+        return "ask"
+    if activity not in QUIET:
+        return "clear"
+    return "fresh"
+
+
+def state(n):
+    a = n.get("agentActivity") or {}
+    why = n.get("heldReason") or n.get("latestError") or a.get("reason") or ""
+    return "%s/%s %s %s" % (n.get("lifecycleState"), n.get("startupStatus"), a.get("state"), why[:160])
+
+
+def rigs(hid):
+    rc, out, _ = run(["rig", "ps", "--json", *host_args(hid)], 20)
+    rows = as_json(out)
+    return None if rc or not isinstance(rows, list) else [r for r in rows if not r.get("isArchived")]
+
+
+def nodes(hid):
+    d = as_json(run(["rig", "ps", "--nodes", "-A", "--json", *host_args(hid)], 30)[1]) or []
+    return d if isinstance(d, list) else d.get("nodes", [])
+
+
+def find(hid, seat):
+    return next((n for n in nodes(hid) if n.get("canonicalSessionName") == seat), None)
+
+
+def screen(hid, seat):
+    return run(at(hid, ["capture", seat, "--lines", "20"]), 30)[1]
+
+
+def skip_hooks(hid, seat, w):
+    act("hook prompt on %s: continue without trusting" % w,
+        ["rig", "send", seat, "3", *host_args(hid), "--dangerously-interact",
+         "--reason", "Codex hook-trust prompt: continue without trusting (grants nothing)"],
+        "trust the hooks with /hooks in that Codex seat", 60)
+    time.sleep(3)
+    run(at(hid, ["seat", "continue", seat]), 60, ACT_ENV)  # refuses on a resumed conversation: harmless
+
+
+def heal(hid, n):
+    # ponytail: no lock across machines; two /rig runs at once may both heal one seat.
+    seat = n["canonicalSessionName"]
+    w = where(hid, seat)
+    kind = classify(n, screen(hid, seat))
+    if kind == "ask":
+        gap("needs_input", w, state(n))
+        return
+    if kind == "skip_hooks":
+        skip_hooks(hid, seat, w)
+    elif kind == "fresh":
+        rc, _, err = act("fresh occupant for " + w,
+                         at(hid, ["seat", "launch", seat, "--fresh", "--stop", "--reason",
+                                  "rig-up: stuck seat; the owner keeps no old conversations"]),
+                         "none: the old conversation is not kept", 120)
+        if rc:
+            gap("heal_failed", w, err)
+            return
+    cleared, m = False, n
+    for _ in range(10 if kind == "fresh" else 4):
+        m = find(hid, seat)
+        if m and not seat_gap(m):
+            return
+        if m and m.get("lifecycleState") in BAD and m.get("startupStatus") != "failed" and not cleared:
+            act("clear stale flag on " + w,
+                at(hid, ["seat", "clear-attention", seat, "--reason", "rig-up: the seat is live"]), "none")
+            cleared = True
+            continue
+        if HOOK_PROMPT in screen(hid, seat):
+            skip_hooks(hid, seat, w)
+        time.sleep(10)
+    gap("heal_did_not_hold", w, state(m) if m else "seat missing")
+
+
+def host_pass(hid, keep, leave):
+    """Keep rigs running and heal stuck seats on one machine. None: no answer."""
+    rows = rigs(hid)
+    if rows is None:
+        return None
+    by_name = {r["name"]: r for r in rows}
+    for name in keep:
+        r = by_name.get(name)
+        if r is None:
+            gap("keep_running_missing", where(hid, name), "no rig with this name")
+        elif not r.get("runningCount"):
+            rc, _, err = act("rig up %s --existing" % where(hid, name),
+                             at(hid, ["up", name, "--existing", "--yes", "--json"]),
+                             "rig down %s --snapshot" % name, 240)
+            if rc:
+                gap("rig_up_failed", where(hid, name), err)
+            rows = rigs(hid) or rows
+    running = {r["name"] for r in rows if r.get("runningCount") and r["name"] not in leave}
+    stuck = [n for n in nodes(hid) if n.get("rigName") in running and seat_gap(n)]
+    if stuck:
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(lambda n: heal(hid, n), stuck))
+        rows = rigs(hid) or rows
+    for r in rows:
+        if r.get("runningCount") and r.get("attentionCount") and r["name"] not in leave:
+            gap("attention", where(hid, r["name"]), "%s items" % r["attentionCount"])
+    return {r["name"]: "%s %s/%s" % (r["status"], r["runningCount"], r["nodeCount"]) for r in rows}
+
+
+def daemon():
+    rc, out, _ = run(["rig", "daemon", "status"], 20)
+    m = re.search(r"running on port (\d+)", out)
+    if not m:
+        rc, _, err = act("rig start --last", ["rig", "start", "--last", "--json"], "rig daemon stop", 240)
+        if rc:
+            gap("daemon_start_failed", "local", err)
+        return {"state": "started" if rc == 0 else "down"}
+    port = m.group(1)
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%s/healthz" % port, timeout=3) as r:
+            hz = json.load(r)
+    except (OSError, ValueError):
+        gap("healthz_unanswered", "local", "version check skipped")
+        return {"state": "up", "port": port}
+    _, cli, _ = run(["rig", "--version"], 20)
+    if version_match(cli, hz.get("semver"), hz.get("commit")):
+        return {"state": "up", "port": port, "selfHostId": hz.get("selfHostId")}
+    rc, _, err = act("daemon restart (ran %s)" % hz.get("semver"), ["rig", "daemon", "stop"], "none: seats survive")
+    if rc:
+        gap("daemon_stop_failed", "local", err + " (read rig daemon logs, do not repeat)")
+        return {"state": "stale", "port": port}
+    rc, _, err = act("rig daemon start --wait-for-kernel", ["rig", "daemon", "start", "--wait-for-kernel"], "none", 240)
+    if rc:
+        gap("daemon_start_failed", "local", err)
+    return {"state": "restarted" if rc == 0 else "down", "port": port}
+
+
+def online_peers():
+    """Tailscale DNS names that are online, or None when the CLI is missing."""
+    for exe in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+        rc, out, _ = run([exe, "status", "--json"], 10)
+        if rc == 0 and as_json(out):
+            return {p.get("DNSName", "").rstrip(".") for p in as_json(out).get("Peer", {}).values() if p.get("Online")}
+    return None
+
+
+def fleet(leave):
+    # Per-host reads in parallel: `rig ps --all-hosts` took 10.7 s here, one host 0.3 s.
+    hosts = as_json(run(["rig", "host", "list", "--json"], 20)[1]) or []
+    peers = online_peers()
+
+    def one(h):
+        hid = h["id"]
+        name = urlparse(h.get("url", "")).hostname or h.get("target", "")
+        if peers is not None and name not in peers:
+            return hid, "offline"
+        res = host_pass(hid, ["kernel"], leave)
+        if res is None:
+            rc, _, err = act("start the daemon on %s" % hid, at(hid, ["start", "--last", "--json"]),
+                             "rig-on %s daemon stop" % hid, 240)
+            res = host_pass(hid, ["kernel"], leave) if rc == 0 else None
+            if res is None:
+                gap("host_unreachable", hid, err)
+                return hid, "unreachable"
+        return hid, res
+
+    with ThreadPoolExecutor(8) as pool:
+        return dict(pool.map(one, hosts))
+
+
+def pane(line_count=3):
+    rc, out, _ = run(["tmux", "capture-pane", "-p", "-t", DASH], 10)
+    return None if rc else out.splitlines()[:line_count]
+
+
+def send(text):
+    run(["tmux", "send-keys", "-t", DASH, "-l", text], 10)
+    run(["tmux", "send-keys", "-t", DASH, "Enter"], 10)
+    time.sleep(1.5)
+
+
+def dashboard(project, mission):
+    # ponytail: default tmux server only; add -L/-S from tmuxAttachCommand if a machine uses another.
+    lines = pane()
+    if lines is None:
+        gap("dashboard_missing", "operator-human@kernel", "no tmux pane")
+        return "missing"
+    if not (lines[:1] and lines[0].startswith("cmd ▸")):
+        cmd = run(["tmux", "display-message", "-p", "-t", DASH, "#{pane_current_command}"], 10)[1].strip()
+        if cmd not in SHELLS:
+            gap("dashboard_not_tui", "operator-human@kernel", "pane runs %s" % cmd)
+            return "not tui"
+        actions.append({"did": "started rig tui in the dashboard pane", "rc": 0, "undo": "none"})
+        send("rig tui")
+        time.sleep(2)
+        lines = pane()
+        if not (lines and lines[0].startswith("cmd ▸")):
+            gap("dashboard_not_tui", "operator-human@kernel", "rig tui did not start")
+            return "not tui"
+    for word, value in (("project", project), ("mission", mission)):
+        if not value:
+            continue
+        if not re.match(r"cmd ▸ ▊\s+Tab complete", (pane() or [""])[0]):
+            gap("dashboard_busy", "operator-human@kernel", "command bar not empty, skipped %s" % word)
+            break
+        send("%s %s" % (word, value))
+        actions.append({"did": "dashboard: %s %s" % (word, value), "rc": 0, "undo": "type projects"})
+    return "tui"
+
+
+def view(target):
+    env = dict(ENV)
+    if env.get("HERDR_ENV") == "1":
+        for k in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"):
+            env.pop(k, None)
+    rc, out, err = run(["rig", "terminal", "open", target, "--window", "--json"], 60, env)
+    res = as_json(out) or {}
+    keep = {k: res[k] for k in ("opened", "reusedWorkspace", "absent", "degraded", "notes", "run") if res.get(k)}
+    if not (res.get("opened") or res.get("reusedWorkspace")):
+        gap("view_not_opened", target, err or json.dumps(keep)[:300])
+    return keep
+
+
+def receipt():
+    if not actions:
+        return None
+    rc, root, _ = run(["rig", "config", "get", "workspace.root"], 20)
+    root = root.strip() if rc == 0 and root.strip() else os.path.expanduser("~/.openrig/workspace")
+    folder = os.path.join(os.path.expanduser(root), "artifacts", "ops-receipts")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, time.strftime("%Y-%m-%d") + "-rig-up.md")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n## rig-up %s\n" % time.strftime("%H:%M:%S"))
+        for a in actions:
+            f.write("- %s (rc %s). Undo: %s\n" % (a["did"], a["rc"], a["undo"]))
+    return path
+
+
+def self_test():
+    notes = "- Keep running (every `/rig` brings these back with `rig up <rig> --existing`): kernel, docs.\n"
+    assert names(notes, "- Keep running", ["kernel"]) == ["kernel", "docs"]
+    assert names("- Keep running: none yet.", "- Keep running", ["kernel"]) == []
+    assert names("no line", "- Keep running", ["kernel"]) == ["kernel"]
+    assert names("- Leave alone (owned elsewhere): none yet.", "- Leave alone", []) == []
+    assert version_match("0.6.10 (3001cc43)", "0.6.10", "3001cc436656c4")
+    assert not version_match("0.6.10 (3001cc43)", "0.6.9", "3001cc436656c4")
+    assert not version_match("0.6.10 (3001cc43)", "0.6.10", "abc")
+    assert seat_gap({"lifecycleState": "running", "startupStatus": "attention_required"})
+    assert seat_gap({"agentActivity": {"state": "needs_input"}})
+    assert not seat_gap({"lifecycleState": "running", "startupStatus": "ready", "agentActivity": {"state": "idle"}})
+    ready_ask = {"lifecycleState": "running", "startupStatus": "ready", "agentActivity": {"state": "needs_input"}}
+    assert classify(ready_ask, "  " + HOOK_PROMPT + " (hooks won't run)") == "skip_hooks"
+    assert classify(ready_ask, "Which option?") == "ask"
+    assert classify({"lifecycleState": "attention_required", "agentActivity": {"state": "running"}}, "") == "clear"
+    assert classify({"lifecycleState": "attention_required", "startupStatus": "failed"}, "% zsh") == "fresh"
+    print("self-test ok")
+
+
+def main(argv):
+    if "--self-test" in argv:
+        return self_test() or 0
+    if os.environ.get("OPENRIG_SESSION_NAME"):
+        print(json.dumps({"inside_seat": os.environ["OPENRIG_SESSION_NAME"]}))
+        return 3
+    opts = {"--project": None, "--mission": None}
+    opens, it = [], iter(argv)
+    for a in it:
+        if a in opts:
+            opts[a] = next(it, None)
+        elif a == "--open":
+            opens.append(next(it, ""))
+        elif a != "--show":
+            print("usage: rig-up [--show] [--open <target>]... [--project <id> --mission <name>]", file=sys.stderr)
+            return 2
+    start = time.time()
+    rc, ver, err = run(["rig", "--version"], 20)
+    if rc:
+        gap("not_installed", "local", err)
+        print(json.dumps({"version": None, "gaps": gaps}))
+        return 0
+    try:
+        with open(NOTES, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    keep, leave = names(text, "- Keep running", ["kernel"]), names(text, "- Leave alone", [])
+    report = {"version": ver.strip(), "host_selected": run(["rig", "config", "get", "host.selected"], 20)[1].strip()}
+    report["daemon"] = daemon()
+    if report["daemon"]["state"] != "down":
+        with ThreadPoolExecutor(2) as pool:
+            loc, flt = pool.submit(host_pass, None, keep, leave), pool.submit(fleet, leave)
+            report["local"], report["fleet"] = loc.result(), flt.result()
+        if report["local"] is None:
+            gap("local_ps_failed", "local", "rig ps --json gave no rows")
+        if "--show" in argv or opens:
+            report["dashboard"] = dashboard(opts["--project"], opts["--mission"])
+            report["view"] = {t: view(t) for t in (["saved:kernel"] + opens)}
+    report.update(actions=actions, gaps=gaps, receipt=receipt(), elapsed_s=round(time.time() - start, 1))
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

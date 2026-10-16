@@ -1,6 +1,6 @@
 # Troubleshooting
 
-First try `/rig` with no words. It finds and fixes most of the problems below by itself and tells you what is left.
+First try `/rig` with no words. It checks every online machine, fixes most of the problems below by itself and tells you what is left.
 
 ## Install
 
@@ -19,7 +19,10 @@ Install the tools it names, or run `./install.sh --install-deps`. OpenRig needs 
 ## Daemon
 
 **`rig daemon status` says it is not running.**
-`rig daemon start`. After a reboot, `rig start --last` also restores the rigs that were running.
+`/rig` starts it. By hand: `rig daemon start`. After a reboot, `rig start --last` also restores the rigs that were running.
+
+**The daemon runs an older version than `rig --version`.**
+This happens after an upgrade. `/rig` restarts the daemon, and the agents' tmux sessions survive. By hand: `rig daemon stop && rig daemon start --wait-for-kernel`.
 
 **Port 7433 is in use.**
 Another program uses the port. Find it with `lsof -nP -iTCP:7433 -sTCP:LISTEN`. Or run OpenRig on another port: `rig config set daemon.port 7444`, then `rig daemon start`.
@@ -33,10 +36,13 @@ Another program uses the port. Find it with `lsof -nP -iTCP:7433 -sTCP:LISTEN`. 
 Scrolling puts the agent's tmux pane into copy mode, and messages wait until it leaves that mode. Click the tile and press `q` or `Esc`. Or ask: `/rig builder@myapp is not getting messages`.
 
 **An agent quit and its tile shows a plain shell.**
-Ask `/rig bring builder@myapp back`. It resumes the agent with its old conversation and tells OpenRig about the new session.
+`/rig` gives it a fresh start: a new conversation in the same seat. Its queue work stays. If you resumed the old conversation in the tile yourself, ask `/rig adopt the session of builder@myapp`. It runs `rig reconcile-session`, so OpenRig tracks that session.
 
 **An agent waits at an update, trust or "continue?" prompt.**
 `/rig` answers routine prompts itself. It brings you prompts that grant new access, spend money or change the scope.
+
+**A Codex agent shows "Hooks need review".**
+A plugin hook is new or changed. `/rig` picks "Continue without trusting", so the agent works without that hook. To trust the hook, open the agent's tile, type `/hooks`, select the hook and press `t`. Codex keeps that choice on each machine.
 
 **Agents fail with a login error.**
 The sign-in expired. Run `claude` and use `/login`, or run `codex login`. Then ask `/rig` to restart the stopped agents.
