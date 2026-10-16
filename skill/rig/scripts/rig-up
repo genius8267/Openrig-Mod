@@ -268,6 +268,20 @@ def fleet(leave):
         return dict(pool.map(one, hosts))
 
 
+def machine_lines(self_id, local, fleet):
+    """One report line per machine: `id: kernel 4/4, docs stopped`."""
+    def text(res):
+        if not isinstance(res, dict):
+            return res or "no answer"
+        parts = []
+        for name, v in sorted(res.items()):
+            status, _, count = v.partition(" ")
+            parts.append("%s %s" % (name, count if status == "running" else status if status == "stopped" else v))
+        return ", ".join(parts) or "no rigs"
+    head = "%s (this machine)" % self_id if self_id else "this machine"
+    return ["%s: %s" % (head, text(local))] + ["%s: %s" % (h, text(r)) for h, r in (fleet or {}).items()]
+
+
 def pane(line_count=3):
     rc, out, _ = run(["tmux", "capture-pane", "-p", "-t", DASH], 10)
     return None if rc else out.splitlines()[:line_count]
@@ -353,6 +367,10 @@ def self_test():
     assert classify(ready_ask, "Which option?") == "ask"
     assert classify({"lifecycleState": "attention_required", "agentActivity": {"state": "running"}}, "") == "clear"
     assert classify({"lifecycleState": "attention_required", "startupStatus": "failed"}, "% zsh") == "fresh"
+    assert machine_lines("air", {"kernel": "running 4/4", "docs": "stopped 0/5"},
+                         {"pro": {"x": "partial 1/2"}, "mini": "offline", "box": {}}) == [
+        "air (this machine): docs stopped, kernel 4/4", "pro: x partial 1/2", "mini: offline", "box: no rigs"]
+    assert machine_lines(None, None, None) == ["this machine: no answer"]
     print("self-test ok")
 
 
@@ -392,6 +410,7 @@ def main(argv):
             report["local"], report["fleet"] = loc.result(), flt.result()
         if report["local"] is None:
             gap("local_ps_failed", "local", "rig ps --json gave no rows")
+        report["machines"] = machine_lines(report["daemon"].get("selfHostId"), report["local"], report["fleet"])
         if "--show" in argv or opens:
             report["dashboard"] = dashboard(opts["--project"], opts["--mission"])
             report["view"] = {t: view(t) for t in (["saved:kernel"] + opens)}
